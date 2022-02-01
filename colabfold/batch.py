@@ -628,9 +628,9 @@ def get_msa_and_templates(
                 template_features.append(template_feature)
     else:
         for index in range(0, len(query_seqs_unique)):
+            # if templates are not provided then generate 'blank' templates
             template_feature = mk_mock_template(query_seqs_unique[index])
             template_features.append(template_feature)
-
     if len(query_sequences) == 1:
         pair_mode = "none"
 

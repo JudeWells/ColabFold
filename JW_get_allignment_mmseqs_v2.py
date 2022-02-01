@@ -3,10 +3,11 @@ from colabfold.batch import get_msa_and_templates, msa_to_str, generate_input_fe
 from pathlib import Path
 import pandas as pd
 import os
+import time
 # queries is a list which is passed into the outer function above this which is run_get_embeddings()
 # [('test_7dfa6', 'PIAQIHILEGRSDEQKETLIREVSEAISRSLDAPLTSVRVIITEMAKGHFGIGGELASK', None)]
 
-def pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_cardinality, template_features):
+def pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_cardinality, template_features, directory_out = 'saved_msa/'):
     msa_dict = {
         'unpaired_msa': unpaired_msa,
         'paired_msa': paired_msa,
@@ -15,7 +16,6 @@ def pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_car
         'template_features': template_features,
 
     }
-    directory_out = 'saved_msa/'
     filename = directory_out + jobname + '.pickle'
     with open(filename, 'wb') as handle:
         pickle.dump(msa_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -26,6 +26,7 @@ result_dir = Path('')
 use_templates = False
 pair_mode = "unpaired+paired"
 host_url = 'https://a3m.mmseqs.com'
+directory_out = 'saved_msa/'
 
 # load the dataframe which contains the sequences
 filepath = '/Users/judewells/Documents/dataScienceProgramming/cath-funsite-predictor/experiments/PPI_training_dataset_with_sequences.csv'
@@ -38,15 +39,20 @@ for i, row in df.iterrows():
     if query_sequence is None:
         continue
     jobname = row.domain_id
+    filepath = directory_out + jobname + '.pickle'
+    if os.path.exists(filepath):
+        continue
 
     msa_results = get_msa_and_templates(jobname, query_sequence, result_dir,
                     msa_mode, use_templates, pair_mode, host_url)
 
     # split the msa_results tuple into its constitutent parts
     unpaired_msa,paired_msa,query_seqs_unique,query_seqs_cardinality,template_features  = msa_results
-    pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_cardinality, template_features)
+    pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_cardinality,
+            template_features, directory_out = 'saved_msa/')
     if i % 50 == 0:
         print(f'completed {i}')
+    time.sleep(30)
 
 
 
