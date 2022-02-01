@@ -337,6 +337,65 @@ def predict_structure(
     return out, model_rank
 
 
+def predict_structure_get_embeddings(
+    prefix: str,
+    result_dir: Path,
+    feature_dict: Dict[str, Any],
+    is_complex: bool,
+    use_templates: bool,
+    sequences_lengths: List[int],
+    crop_len: int,
+    model_type: str,
+    model_runner_and_params: List[Tuple[str, model.RunModel, haiku.Params]],
+    do_relax: bool = False,
+    rank_by: str = "auto",
+    random_seed: int = 0,
+    stop_at_score: float = 100,
+    prediction_callback: Callable[[Any, Any, Any, Any], Any] = None,
+):
+    """Predicts structure using AlphaFold for the given sequence."""
+    if rank_by == "auto":
+        # score complexes by ptmscore and sequences by plddt
+        rank_by = "plddt" if not is_complex else "ptmscore"
+
+    plddts, paes, ptmscore = [], [], []
+    max_paes = []
+    unrelaxed_pdb_lines = []
+    relaxed_pdb_lines = []
+    prediction_times = []
+    seq_len = sum(sequences_lengths)
+    prediction_results_list = []
+    model_names = []
+    for (model_name, model_runner, params) in model_runner_and_params:
+        logger.info(f"Running {model_name}")
+        model_names.append(model_name)
+        # swap params to avoid recompiling
+        # note: models 1,2 have diff number of params compared to models 3,4,5 (this was handled on construction)
+        model_runner.params = params
+
+        processed_feature_dict = model_runner.process_features(
+            feature_dict, random_seed=random_seed
+        )
+        if not is_complex:
+            input_features = batch_input(
+                processed_feature_dict,
+                model_runner,
+                model_name,
+                crop_len,
+                use_templates,
+            )
+        else:
+            input_features = processed_feature_dict
+
+        start = time.time()
+
+        prediction_result, recycles = model_runner.predict(input_features)
+        prediction_results_list.append(prediction_result)
+        prediction_time = time.time() - start
+        prediction_times.append(prediction_time)
+    return prediction_results_list
+
+
 def parse_fasta(fasta_string: str) -> Tuple[List[str], List[str]]:
     """Parses FASTA string and returns list of strings with amino-acid sequences.
 
@@ -1152,6 +1211,194 @@ def run(
             is_done_marker.touch()
 
     logger.info("Done")
+
+
+def run_get_embeddings(
+    queries: List[Tuple[str, Union[str, List[str]], Optional[List[str]]]],
+    result_dir: Union[str, Path],
+    num_models: int,
+    num_recycles: int,
+    model_order: List[int],
+    is_complex: bool,
+    model_type: str = "auto",
+    msa_mode: str = "MMseqs2 (UniRef+Environmental)",
+    use_templates: bool = False,
+    use_amber: bool = False,
+    keep_existing_results: bool = True,
+    rank_by: str = "auto",
+    pair_mode: str = "unpaired+paired",
+    data_dir: Union[str, Path] = default_data_dir,
+    host_url: str = DEFAULT_API_SERVER,
+    stop_at_score: float = 100,
+    recompile_padding: float = 1.1,
+    recompile_all_models: bool = False,
+    zip_results: bool = False,
+    prediction_callback: Callable[[Any, Any, Any, Any], Any] = None,
+):
+    version = importlib_metadata.version("colabfold")
+    commit = get_commit()
+    if commit:
+        version += f" ({commit})"
+
+    logger.info(f"Running colabfold {version}")
+
+    data_dir = Path(data_dir)
+    result_dir = Path(result_dir)
+    result_dir.mkdir(exist_ok=True)
+    model_type = set_model_type(is_complex, model_type)
+    if model_type == "AlphaFold2-multimer":
+        model_extension = "_multimer"
+    elif model_type == "AlphaFold2-ptm":
+        model_extension = "_ptm"
+    else:
+        raise ValueError(f"Unknown model_type {model_type}")
+
+    if rank_by == "auto":
+        # score complexes by ptmscore and sequences by plddt
+        rank_by = "plddt" if not is_complex else "ptmscore"
+
+    # Record the parameters of this run
+    config = {
+        "num_queries": len(queries),
+        "use_templates": use_templates,
+        "use_amber": use_amber,
+        "msa_mode": msa_mode,
+        "model_type": model_type,
+        "num_models": num_models,
+        "num_recycles": num_recycles,
+        "model_order": model_order,
+        "keep_existing_results": keep_existing_results,
+        "rank_by": rank_by,
+        "pair_mode": pair_mode,
+        "host_url": host_url,
+        "stop_at_score": stop_at_score,
+        "recompile_padding": recompile_padding,
+        "recompile_all_models": recompile_all_models,
+        "commit": get_commit(),
+        "version": importlib_metadata.version("colabfold"),
+    }
+    config_out_file = result_dir.joinpath("config.json")
+    config_out_file.write_text(json.dumps(config, indent=4))
+    use_env = msa_mode == "MMseqs2 (UniRef+Environmental)"
+    use_msa = (
+        msa_mode == "MMseqs2 (UniRef only)"
+        or msa_mode == "MMseqs2 (UniRef+Environmental)"
+    )
+
+
+
+    model_runner_and_params = load_models_and_params(
+        num_models,
+        use_templates,
+        num_recycles,
+        model_order,
+        model_extension,
+        data_dir,
+        recompile_all_models,
+        stop_at_score=stop_at_score,
+        rank_by=rank_by,
+    )
+
+    crop_len = 0
+    for job_number, (raw_jobname, query_sequence, a3m_lines) in enumerate(queries):
+        jobname = safe_filename(raw_jobname)
+        # In the colab version and with --zip we know we're done when a zip file has been written
+        result_zip = result_dir.joinpath(jobname).with_suffix(".result.zip")
+        if keep_existing_results and result_zip.is_file():
+            logger.info(f"Skipping {jobname} (result.zip)")
+            continue
+        # In the local version we use a marker file
+        is_done_marker = result_dir.joinpath(jobname + ".done.txt")
+        if keep_existing_results and is_done_marker.is_file():
+            logger.info(f"Skipping {jobname} (already done)")
+            continue
+
+        query_sequence_len = (
+            len(query_sequence)
+            if isinstance(query_sequence, str)
+            else sum(len(s) for s in query_sequence)
+        )
+        logger.info(
+            f"Query {job_number + 1}/{len(queries)}: {jobname} (length {query_sequence_len})"
+        )
+
+        try:
+            if a3m_lines is not None:
+                (
+                    unpaired_msa,
+                    paired_msa,
+                    query_seqs_unique,
+                    query_seqs_cardinality,
+                    template_features,
+                ) = unserialize_msa(a3m_lines, query_sequence)
+            else:
+                (
+                    unpaired_msa,
+                    paired_msa,
+                    query_seqs_unique,
+                    query_seqs_cardinality,
+                    template_features,
+                ) = get_msa_and_templates(
+                    jobname,
+                    query_sequence,
+                    result_dir,
+                    msa_mode,
+                    use_templates,
+                    pair_mode,
+                    host_url,
+                )
+            msa = msa_to_str(
+                unpaired_msa, paired_msa, query_seqs_unique, query_seqs_cardinality
+            )
+            result_dir.joinpath(jobname + ".a3m").write_text(msa)
+        except Exception as e:
+            logger.exception(f"Could not get MSA/templates for {jobname}: {e}")
+            continue
+        try:
+            input_features = generate_input_feature(
+                query_seqs_unique,
+                query_seqs_cardinality,
+                unpaired_msa,
+                paired_msa,
+                template_features,
+                is_complex,
+                model_type,
+            )
+        except Exception as e:
+            logger.exception(f"Could not generate input features {jobname}: {e}")
+            continue
+        try:
+            query_sequence_len_array = [
+                len(query_seqs_unique[i])
+                for i, cardinality in enumerate(query_seqs_cardinality)
+                for _ in range(0, cardinality)
+            ]
+
+            if sum(query_sequence_len_array) > crop_len:
+                crop_len = math.ceil(sum(query_sequence_len_array) * recompile_padding)
+
+            predictions_list = predict_structure_get_embeddings(
+                jobname,
+                result_dir,
+                input_features,
+                is_complex,
+                use_templates,
+                sequences_lengths=query_sequence_len_array,
+                crop_len=crop_len,
+                model_type=model_type,
+                model_runner_and_params=model_runner_and_params,
+                do_relax=use_amber,
+                rank_by=rank_by,
+                stop_at_score=stop_at_score,
+                prediction_callback=prediction_callback,
+            )
+        except RuntimeError as e:
+            # This normally happens on OOM. TODO: Filter for the specific OOM error message
+            logger.error(f"Could not predict {jobname}. Not Enough GPU memory? {e}")
+            continue
+
+        return predictions_list
+
 
 
 def set_model_type(is_complex: bool, model_type: str) -> str:

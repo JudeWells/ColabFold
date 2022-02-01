@@ -7,3 +7,9 @@
 /tmalign
 /pytestemp
 __pycache__
+*.csv
+*.a3m
+*.pickle
+saved_msa/
+.idea/
+*_env/
