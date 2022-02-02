@@ -24,14 +24,18 @@ def pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_car
 
 # Set up configuration and settings
 msa_mode = "MMseqs2 (UniRef+Environmental)" #  "MMseqs2 (UniRef only)"
-result_dir = Path('result_dir')
+result_dir_name = 'result_dir'
+if not os.path.exists(result_dir_name):
+    os.mkdir(result_dir_name)
+result_dir = Path(result_dir_name)
 use_templates = False
 pair_mode = "unpaired+paired"
 host_url = 'https://a3m.mmseqs.com'
 directory_out = 'saved_msa/'
-
+if not os.path.exists(directory_out):
+    os.mkdir(directory_out)
 # load the dataframe which contains the sequences
-filepath = '/home/jwells/Documents/cath-funsite-predictor/PPI_training_dataset_with_sequences.csv'
+filepath = '../data/training_data.csv'
 df = pd.read_csv(filepath)
 df['domain_id'] = (df.PDBID + df.CHAIN).str.upper()
 
@@ -46,7 +50,7 @@ df['domain_id'] = (df.PDBID + df.CHAIN).str.upper()
 #         continue
 n_seqs_per_batch = 5
 
-for i in range(0,df.last_valid_index(), n_seqs_per_batch):
+for i in range(1000,df.last_valid_index(), n_seqs_per_batch):
     last_index = i+n_seqs_per_batch-1
     if last_index > df.last_valid_index():
         last_index = df.last_valid_index()
@@ -71,7 +75,5 @@ for i in range(0,df.last_valid_index(), n_seqs_per_batch):
 
         except:
             pass
-
-
 
 

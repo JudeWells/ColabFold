@@ -9,12 +9,18 @@ from argparse import ArgumentParser
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import haiku
+try:
+    import haiku
+except:
+    pass
 import importlib_metadata
 import numpy as np
 import pandas
 from alphafold.notebooks.notebook_utils import get_pae_json
-from jax.lib import xla_bridge
+try:
+    from jax.lib import xla_bridge
+except:
+    pass
 from numpy import ndarray
 
 try:
