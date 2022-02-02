@@ -14,3 +14,4 @@ saved_msa/
 .idea/
 *_env/
 jw_batch_sequence_/
+result_dir/
