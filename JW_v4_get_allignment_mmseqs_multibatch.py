@@ -9,28 +9,29 @@ import time
 
 def pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_cardinality, template_features, directory_out = 'saved_msa/'):
     chain_ids = jobname.split('-|-')
-    msa_dict = {
-        'unpaired_msa': unpaired_msa,
-        'paired_msa': paired_msa,
-        'query_seqs_unique': query_seqs_unique,
-        'query_seqs_cardinality': query_seqs_cardinality,
-        'template_features': template_features,
+    for idx, ch_id in enumerate(chain_ids):
+        msa_dict = {
+            'unpaired_msa': unpaired_msa[idx],
+            'paired_msa': paired_msa[idx],
+            'query_seqs_unique': query_seqs_unique[idx],
+            'query_seqs_cardinality': query_seqs_cardinality[idx],
+            'template_features': template_features[idx],
 
-    }
-    filename = directory_out + jobname + '.pickle'
-    with open(filename, 'wb') as handle:
-        pickle.dump(msa_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        }
+        filename = directory_out + ch_id + '.pickle'
+        with open(filename, 'wb') as handle:
+            pickle.dump(msa_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 # Set up configuration and settings
 msa_mode = "MMseqs2 (UniRef+Environmental)" #  "MMseqs2 (UniRef only)"
-result_dir = Path('')
+result_dir = Path('result_dir')
 use_templates = False
 pair_mode = "unpaired+paired"
 host_url = 'https://a3m.mmseqs.com'
 directory_out = 'saved_msa/'
 
 # load the dataframe which contains the sequences
-filepath = '/Users/judewells/Documents/dataScienceProgramming/cath-funsite-predictor/experiments/PPI_training_dataset_with_sequences.csv'
+filepath = '/home/jwells/Documents/cath-funsite-predictor/PPI_training_dataset_with_sequences.csv'
 df = pd.read_csv(filepath)
 df['domain_id'] = (df.PDBID + df.CHAIN).str.upper()
 
@@ -43,17 +44,33 @@ df['domain_id'] = (df.PDBID + df.CHAIN).str.upper()
 #     filepath = directory_out + jobname + '.pickle'
 #     if os.path.exists(filepath):
 #         continue
+n_seqs_per_batch = 5
 
-jobname = '-|-'.join(df.loc[70:74,'domain_id'].values)
-batch_of_sequences = df.loc[70:74,'sequence'].values
+for i in range(0,df.last_valid_index(), n_seqs_per_batch):
+    last_index = i+n_seqs_per_batch-1
+    if last_index > df.last_valid_index():
+        last_index = df.last_valid_index()
+    one_batch = df.loc[i:last_index, :]
+    chain_ids = one_batch.domain_id.values
+    batch_completed = False
+    for chid in chain_ids:
+        if chid + '.pickle' in os.listdir(directory_out):
+            batch_completed = True
+    if not batch_completed:
+        print(f'\n\n{i} sequences complete\n\n')
+        jobname = '-|-'.join(chain_ids)
+        batch_of_sequences = one_batch.sequence.values
+        try:
+            msa_results = get_msa_and_templates(jobname, batch_of_sequences, result_dir,
+                            msa_mode, use_templates, pair_mode, host_url)
 
-msa_results = get_msa_and_templates(jobname, batch_of_sequences, result_dir,
-                msa_mode, use_templates, pair_mode, host_url)
+            # split the msa_results tuple into its constitutent parts
+            unpaired_msa,paired_msa,query_seqs_unique,query_seqs_cardinality,template_features = msa_results
+            pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_cardinality,
+                    template_features, directory_out='saved_msa/')
 
-# split the msa_results tuple into its constitutent parts
-unpaired_msa,paired_msa,query_seqs_unique,query_seqs_cardinality,template_features  = msa_results
-pickler(jobname, unpaired_msa, paired_msa, query_seqs_unique, query_seqs_cardinality,
-        template_features, directory_out = 'saved_msa/')
+        except:
+            pass
 
 
 
